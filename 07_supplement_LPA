@@ -1,0 +1,310 @@
+# ==============================================================================
+# Supplementary Latent Profile Analysis
+# ==============================================================================
+#
+# Purpose:
+#   Reproduce the supplementary latent profile analysis reported in Table S8.
+#
+#   Latent profile models with 2-6 requested profiles are estimated using the
+#   same three standardized cognitive indicators used in the primary k-means
+#   clustering analysis:
+#
+#     1. Verbal knowledge
+#     2. Log-transformed mean response latency
+#     3. Response-time variability
+#
+#   Models assume equal within-profile variances and zero within-profile
+#   covariances, corresponding to the EEI covariance specification in mclust.
+#
+#   For each requested number of profiles, the script reports:
+#     - Bayesian Information Criterion (BIC)
+#     - Integrated Classification Likelihood (ICL)
+#     - smallest populated profile
+#     - largest populated profile
+#     - number of populated profiles
+#
+# Data:
+#   The analysis requires a local file containing the three standardized
+#   cognitive indicators. SOEP data are subject to the SOEP data-use agreement
+#   and are therefore not included in the public repository.
+#
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# 1. Required package
+# ------------------------------------------------------------------------------
+
+required_packages <- c("mclust")
+
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Missing required package(s): ",
+    paste(missing_packages, collapse = ", "),
+    ". Please install them before running this script."
+  )
+}
+
+library(mclust)
+
+
+# ------------------------------------------------------------------------------
+# 2. File paths
+# ------------------------------------------------------------------------------
+
+input_file <- file.path(
+  "data",
+  "lpa_input_anonymous.csv"
+)
+
+output_dir <- "results"
+
+dir.create(
+  output_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+
+# ------------------------------------------------------------------------------
+# 3. Read LPA input data
+# ------------------------------------------------------------------------------
+
+if (!file.exists(input_file)) {
+  stop(
+    "Input file not found: ", input_file,
+    "\nSee the README for instructions on creating this file from the ",
+    "restricted-access SOEP data."
+  )
+}
+
+lpa_input <- read.csv(
+  input_file,
+  stringsAsFactors = FALSE
+)
+
+required_variables <- c(
+  "word_z",
+  "log_speed_z",
+  "sd_speed_z"
+)
+
+missing_variables <- setdiff(
+  required_variables,
+  names(lpa_input)
+)
+
+if (length(missing_variables) > 0) {
+  stop(
+    "The input file is missing the following variable(s): ",
+    paste(missing_variables, collapse = ", ")
+  )
+}
+
+lpa_input <- lpa_input[, required_variables]
+
+if (anyNA(lpa_input)) {
+  stop(
+    "The LPA input contains missing values. ",
+    "The analysis requires complete data on all three cognitive indicators."
+  )
+}
+
+X_lpa <- as.matrix(lpa_input)
+
+cat(
+  "LPA input:",
+  nrow(X_lpa), "respondents and",
+  ncol(X_lpa), "cognitive indicators.\n"
+)
+
+
+# ------------------------------------------------------------------------------
+# 4. Function for fitting one profile solution
+# ------------------------------------------------------------------------------
+
+fit_lpa_solution <- function(k, data) {
+
+  cat("\n")
+  cat("------------------------------------------------------------\n")
+  cat("Fitting", k, "requested profiles\n")
+  cat("------------------------------------------------------------\n")
+
+  invisible(gc())
+
+  model <- mclust::Mclust(
+    data,
+    G = k,
+    modelNames = "EEI"
+  )
+
+  class_counts <- table(model$classification)
+  class_proportions <- prop.table(class_counts)
+
+  result <- data.frame(
+    Requested_profiles = k,
+    BIC = as.numeric(model$bic),
+    ICL = as.numeric(model$icl),
+    Smallest_profile_n = min(class_counts),
+    Smallest_profile_pct = 100 * min(class_proportions),
+    Largest_profile_n = max(class_counts),
+    Largest_profile_pct = 100 * max(class_proportions),
+    Occupied_profiles = length(class_counts)
+  )
+
+  cat("\nFit statistics:\n")
+  print(result)
+
+  cat("\nProfile sizes:\n")
+  print(class_counts)
+
+  # Save profile counts for transparency
+  profile_sizes <- data.frame(
+    Requested_profiles = k,
+    Profile = names(class_counts),
+    n = as.integer(class_counts),
+    Percent = 100 * as.numeric(class_proportions)
+  )
+
+  write.csv(
+    profile_sizes,
+    file.path(
+      output_dir,
+      paste0("lpa_profile_sizes_", k, ".csv")
+    ),
+    row.names = FALSE
+  )
+
+  rm(model)
+  invisible(gc())
+
+  return(result)
+}
+
+
+# ------------------------------------------------------------------------------
+# 5. Estimate 2-6 profile solutions
+# ------------------------------------------------------------------------------
+
+# Models are fitted sequentially to minimize memory use.
+
+fit2 <- fit_lpa_solution(
+  k = 2,
+  data = X_lpa
+)
+
+fit3 <- fit_lpa_solution(
+  k = 3,
+  data = X_lpa
+)
+
+fit4 <- fit_lpa_solution(
+  k = 4,
+  data = X_lpa
+)
+
+fit5 <- fit_lpa_solution(
+  k = 5,
+  data = X_lpa
+)
+
+fit6 <- fit_lpa_solution(
+  k = 6,
+  data = X_lpa
+)
+
+
+# ------------------------------------------------------------------------------
+# 6. Combine results
+# ------------------------------------------------------------------------------
+
+lpa_comparison <- rbind(
+  fit2,
+  fit3,
+  fit4,
+  fit5,
+  fit6
+)
+
+cat("\n")
+cat("============================================================\n")
+cat("LPA model comparison\n")
+cat("============================================================\n")
+
+print(
+  lpa_comparison,
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------------------------
+# 7. Save Table S8 results
+# ------------------------------------------------------------------------------
+
+write.csv(
+  lpa_comparison,
+  file.path(
+    output_dir,
+    "Table_S8_LPA_model_comparison.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------------------------
+# 8. Flag solutions with fewer populated profiles than requested
+# ------------------------------------------------------------------------------
+
+lpa_comparison$All_requested_profiles_populated <-
+  lpa_comparison$Requested_profiles ==
+  lpa_comparison$Occupied_profiles
+
+cat("\nSolutions with fewer populated profiles than requested:\n")
+
+print(
+  lpa_comparison[
+    !lpa_comparison$All_requested_profiles_populated,
+    c(
+      "Requested_profiles",
+      "Occupied_profiles",
+      "Smallest_profile_n",
+      "Smallest_profile_pct"
+    )
+  ],
+  row.names = FALSE
+)
+
+
+# Save final comparison including the population-status indicator
+write.csv(
+  lpa_comparison,
+  file.path(
+    output_dir,
+    "Table_S8_LPA_model_comparison_full.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------------------------
+# 9. Reproducibility information
+# ------------------------------------------------------------------------------
+
+capture.output(
+  sessionInfo(),
+  file = file.path(
+    output_dir,
+    "sessionInfo_LPA.txt"
+  )
+)
+
+cat("\nAnalysis complete.\n")
+cat(
+  "Results saved in:",
+  normalizePath(output_dir),
+  "\n"
+)
